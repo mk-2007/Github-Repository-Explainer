@@ -61,7 +61,13 @@ GitHub PAT at github.com/settings/tokens.
       re-spending tokens if a serverless invocation times out partway
       through. A single module's LLM call failing doesn't fail the run —
       it gets a placeholder summary and processing continues.
-- [ ] Phase 5 — synthesis: narrative, Mermaid diagrams, topological ordering
+- [x] Phase 5 — `lib/diagram-builder.ts` generates Mermaid architecture +
+      sequence diagrams directly from the dependency graph (zero LLM
+      cost), capping density to the most-connected modules so large repos
+      don't produce unreadable graphs. `POST /api/synthesize/[runId]`
+      makes exactly one LLM call — feeding it capped module summaries in
+      topological order — to produce the architectural narrative and
+      onboarding guide, then marks the run `done`.
 - [ ] Phase 6 — frontend (maximalist UI, live progress, diagram + guide views)
 
 ## Known edge cases to handle (tracked, not yet all implemented)
