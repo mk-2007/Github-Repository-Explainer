@@ -1,0 +1,226 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import MermaidDiagram from "@/components/MermaidDiagram";
+
+type Phase = "parsing" | "summarizing" | "synthesizing" | "done" | "failed";
+
+interface ModuleRow {
+  path: string;
+  language: string | null;
+  loc: number;
+  topo_order: number | null;
+  llm_summary: string | null;
+}
+interface Results {
+  repo: string;
+  commitSha: string;
+  modules: ModuleRow[];
+  diagrams: { kind: string; mermaid_src: string }[];
+  guide: { narrative_md: string; onboarding_md: string } | null;
+}
+
+const PHASE_LABELS: Record<string, string> = {
+  fetching: "fetching repo",
+  parsing: "parsing modules (tree-sitter, no LLM cost)",
+  summarizing: "summarizing modules",
+  synthesizing: "synthesizing architecture narrative",
+  done: "done",
+};
+
+function languageBadgeClass(lang: string | null) {
+  if (lang === "typescript") return "badge-violet";
+  if (lang === "python") return "badge-mint";
+  if (lang === "javascript") return "badge-mint";
+  return "badge-amber"; // unsupported/unknown language — flagged, not hidden
+}
+
+export default function RunPage({ params }: { params: { id: string } }) {
+  const runId = params.id;
+  const [phase, setPhase] = useState<Phase>("parsing");
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<Results | null>(null);
+  const [activeTab, setActiveTab] = useState<"architecture" | "sequence" | "guide" | "modules">(
+    "architecture"
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function drive() {
+      try {
+        const statusRes = await fetch(`/api/status/${runId}`);
+        const status = await statusRes.json();
+        if (!statusRes.ok) throw new Error(status.error ?? "Could not load run");
+
+        let current = status.status as Phase;
+
+        if (current === "parsing") {
+          const r = await fetch(`/api/parse/${runId}`, { method: "POST" });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error ?? "Parsing failed");
+          current = "summarizing";
+        }
+        if (cancelled) return;
+        setPhase(current);
+
+        while (current === "summarizing" && !cancelled) {
+          const r = await fetch(`/api/summarize/${runId}`, { method: "POST" });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error ?? "Summarization failed");
+          if (data.remaining !== undefined) {
+            setProgress({ current: (data.processed ?? 0), total: data.remaining + (data.processed ?? 0) });
+          }
+          if (data.done) current = "synthesizing";
+        }
+        if (cancelled) return;
+        setPhase(current);
+
+        if (current === "synthesizing") {
+          const r = await fetch(`/api/synthesize/${runId}`, { method: "POST" });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error ?? "Synthesis failed");
+          current = "done";
+        }
+        if (cancelled) return;
+        setPhase(current);
+
+        if (current === "done") {
+          const r = await fetch(`/api/results/${runId}`);
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error ?? "Could not load results");
+          if (!cancelled) setResults(data);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setError(err.message);
+          setPhase("failed");
+        }
+      }
+    }
+
+    drive();
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
+
+  if (phase === "failed") {
+    return (
+      <main style={{ padding: 40, maxWidth: 640, margin: "0 auto" }}>
+        <div className="badge badge-amber" style={{ marginBottom: 16 }}>
+          analysis failed
+        </div>
+        <p className="mono" style={{ color: "var(--text-dim)" }}>{error}</p>
+        <a href="/" className="mono">← try another repo</a>
+      </main>
+    );
+  }
+
+  if (!results) {
+    return (
+      <main
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 16,
+        }}
+      >
+        <div className="badge badge-mint">
+          <span>●</span> {PHASE_LABELS[phase] ?? phase}
+        </div>
+        {progress && (
+          <div className="mono" style={{ color: "var(--text-dim)", fontSize: "0.85rem" }}>
+            {progress.current} / {progress.total} modules summarized
+          </div>
+        )}
+      </main>
+    );
+  }
+
+  const architectureDiagram = results.diagrams.find((d) => d.kind === "architecture");
+  const sequenceDiagram = results.diagrams.find((d) => d.kind === "sequence");
+
+  return (
+    <main style={{ maxWidth: 1000, margin: "0 auto", padding: "32px 24px" }}>
+      <header style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <h1 className="mono" style={{ fontSize: "1.4rem", margin: 0 }}>{results.repo}</h1>
+        <span className="path">{results.commitSha.slice(0, 7)}</span>
+      </header>
+
+      <nav style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid var(--panel-border)" }}>
+        {(["architecture", "sequence", "guide", "modules"] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className="mono"
+            style={{
+              background: "none",
+              border: "none",
+              borderBottom: activeTab === tab ? "2px solid var(--mint)" : "2px solid transparent",
+              color: activeTab === tab ? "var(--mint)" : "var(--text-dim)",
+              padding: "8px 14px",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}
+          >
+            {tab}
+          </button>
+        ))}
+      </nav>
+
+      {activeTab === "architecture" && architectureDiagram && (
+        <div className="panel" style={{ padding: 20, borderRadius: 6 }}>
+          <MermaidDiagram src={architectureDiagram.mermaid_src} />
+        </div>
+      )}
+
+      {activeTab === "sequence" && sequenceDiagram && (
+        <div className="panel" style={{ padding: 20, borderRadius: 6 }}>
+          <MermaidDiagram src={sequenceDiagram.mermaid_src} />
+        </div>
+      )}
+
+      {activeTab === "guide" && results.guide && (
+        <div style={{ display: "grid", gap: 20 }}>
+          <div className="panel" style={{ padding: 24, borderRadius: 6 }}>
+            <div className="badge badge-mint" style={{ marginBottom: 12 }}>architecture narrative</div>
+            {results.guide.narrative_md.split("\n\n").map((p, i) => (
+              <p key={i} style={{ lineHeight: 1.6, color: "var(--text)" }}>{p}</p>
+            ))}
+          </div>
+          <div className="panel" style={{ padding: 24, borderRadius: 6 }}>
+            <div className="badge badge-violet" style={{ marginBottom: 12 }}>onboarding guide</div>
+            {results.guide.onboarding_md.split("\n").map((line, i) => (
+              <p key={i} style={{ lineHeight: 1.6, color: "var(--text)" }}>{line}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "modules" && (
+        <div style={{ display: "grid", gap: 10 }}>
+          {results.modules.map((m) => (
+            <div key={m.path} className="panel" style={{ padding: 16, borderRadius: 6 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                <span className="path">{m.path}</span>
+                <span className={`badge ${languageBadgeClass(m.language)}`}>
+                  {m.language ?? "unsupported"} · {m.loc} loc
+                </span>
+              </div>
+              <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.92rem", lineHeight: 1.5 }}>
+                {m.llm_summary ?? "No summary generated."}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </main>
+  );
+}

@@ -1,0 +1,96 @@
+:root {
+  --bg: #0b0e14;
+  --panel: #12161f;
+  --panel-border: #262c3a;
+  --text: #e6e8ef;
+  --text-dim: #8b93a7;
+  --mint: #6ee7b7;
+  --amber: #f59e0b;
+  --violet: #8b5cf6;
+  --mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+  --sans: "Inter", -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+}
+
+/* Faint grid overlay used behind panels — IDE-gutter texture, not decoration:
+   it reinforces the "structured/parsed" feeling the product is about. */
+.grid-bg {
+  background-image:
+    linear-gradient(var(--panel-border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--panel-border) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: center;
+  opacity: 0.25;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+}
+
+.badge {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge-mint {
+  color: var(--mint);
+  border: 1px solid rgba(110, 231, 183, 0.35);
+  background: rgba(110, 231, 183, 0.08);
+}
+
+.badge-amber {
+  color: var(--amber);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.badge-violet {
+  color: var(--violet);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.path {
+  font-family: var(--mono);
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+a {
+  color: var(--mint);
+}
+
+::selection {
+  background: rgba(110, 231, 183, 0.25);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

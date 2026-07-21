@@ -68,7 +68,17 @@ GitHub PAT at github.com/settings/tokens.
       makes exactly one LLM call — feeding it capped module summaries in
       topological order — to produce the architectural narrative and
       onboarding guide, then marks the run `done`.
-- [ ] Phase 6 — frontend (maximalist UI, live progress, diagram + guide views)
+- [x] Phase 6 — Next.js frontend. Landing page (`app/page.tsx`) with an
+      animated dependency-graph hero (the actual topological-order
+      feature, rendered as ambient motion before you've even submitted a
+      repo) and the URL form. `app/run/[id]/page.tsx` drives the whole
+      pipeline client-side — calls parse, then loops on summarize until
+      done, then synthesize — showing live progress, then renders the
+      architecture/sequence Mermaid diagrams, the narrative + onboarding
+      guide, and a per-module walkthrough with language badges. Design:
+      IDE-panel-inspired maximalism (JetBrains Mono display face, mint/
+      amber/violet accents each carrying real meaning — resolved/
+      in-progress/cross-module-link — not decoration).
 
 ## Known edge cases to handle (tracked, not yet all implemented)
 
@@ -82,5 +92,5 @@ GitHub PAT at github.com/settings/tokens.
 - Serverless function execution limits mean a large repo's summarization
   can't finish in one request — `/api/summarize/[runId]` is intentionally
   resumable (call it repeatedly, it picks up where it left off) rather
-  than assuming one long-lived process. Phase 6's frontend is what drives
+  than assuming one long-lived process. The frontend's run page drives
   that repeated calling.
