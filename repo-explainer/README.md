@@ -51,7 +51,16 @@ GitHub PAT at github.com/settings/tokens.
       them (Kahn's algorithm, with graceful cycle handling — real repos
       have import cycles). `POST /api/parse/[runId]` wires it to storage.
       Zero LLM calls in this entire phase.
-- [ ] Phase 4 — chunked LLM summarization pipeline with progress tracking
+- [x] Phase 4 — `lib/prompts.ts` builds token-conscious per-module prompts
+      (truncates oversized files rather than blowing the TPM budget in one
+      call) and a synthesis prompt for Phase 5. `POST
+      /api/summarize/[runId]` processes modules in dependency order in
+      bounded batches (`BATCH_SIZE = 8`) and is resumable by design — it
+      only ever selects modules still missing a summary, so a client can
+      call it repeatedly until `done: true` without duplicating work or
+      re-spending tokens if a serverless invocation times out partway
+      through. A single module's LLM call failing doesn't fail the run —
+      it gets a placeholder summary and processing continues.
 - [ ] Phase 5 — synthesis: narrative, Mermaid diagrams, topological ordering
 - [ ] Phase 6 — frontend (maximalist UI, live progress, diagram + guide views)
 
@@ -64,3 +73,8 @@ GitHub PAT at github.com/settings/tokens.
   analysis, prioritize entry points + most-imported modules first" fallback
 - Private repos (needs OAuth flow, not just a static PAT) — out of scope
   for v1, public repos only
+- Serverless function execution limits mean a large repo's summarization
+  can't finish in one request — `/api/summarize/[runId]` is intentionally
+  resumable (call it repeatedly, it picks up where it left off) rather
+  than assuming one long-lived process. Phase 6's frontend is what drives
+  that repeated calling.
