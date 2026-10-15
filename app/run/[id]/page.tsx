@@ -1,9 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import MermaidDiagram from "@/components/MermaidDiagram";
-
-type Phase = "parsing" | "summarizing" | "synthesizing" | "done" | "failed";
+import PipelineProgress, { type Phase } from "@/components/PipelineProgress";
 
 interface ModuleRow {
   path: string;
@@ -12,6 +11,7 @@ interface ModuleRow {
   topo_order: number | null;
   llm_summary: string | null;
 }
+
 interface Results {
   repo: string;
   commitSha: string;
@@ -20,19 +20,11 @@ interface Results {
   guide: { narrative_md: string; onboarding_md: string } | null;
 }
 
-const PHASE_LABELS: Record<string, string> = {
-  fetching: "fetching repo",
-  parsing: "parsing modules (tree-sitter, no LLM cost)",
-  summarizing: "summarizing modules",
-  synthesizing: "synthesizing architecture narrative",
-  done: "done",
-};
-
 function languageBadgeClass(lang: string | null) {
   if (lang === "typescript") return "badge-violet";
   if (lang === "python") return "badge-mint";
   if (lang === "javascript") return "badge-mint";
-  return "badge-amber"; // unsupported/unknown language — flagged, not hidden
+  return "badge-amber";
 }
 
 export default function RunPage({ params }: { params: { id: string } }) {
@@ -108,12 +100,18 @@ export default function RunPage({ params }: { params: { id: string } }) {
 
   if (phase === "failed") {
     return (
-      <main style={{ padding: 40, maxWidth: 640, margin: "0 auto" }}>
-        <div className="badge badge-amber" style={{ marginBottom: 16 }}>
-          analysis failed
+      <main style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        <div className="panel" style={{ padding: 32, maxWidth: 540, width: "100%", borderRadius: 8, border: "1px solid var(--panel-border)" }}>
+          <div className="badge badge-amber" style={{ marginBottom: 16 }}>
+            ANALYSIS FAILED
+          </div>
+          <p className="mono" style={{ color: "var(--text-dim)", lineHeight: 1.6, marginBottom: 24 }}>
+            {error}
+          </p>
+          <a href="/" className="mono" style={{ color: "var(--mint)", textDecoration: "none" }}>
+            ← Return and try another repository
+          </a>
         </div>
-        <p className="mono" style={{ color: "var(--text-dim)" }}>{error}</p>
-        <a href="/" className="mono">← try another repo</a>
       </main>
     );
   }
@@ -124,20 +122,12 @@ export default function RunPage({ params }: { params: { id: string } }) {
         style={{
           minHeight: "100vh",
           display: "flex",
-          flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          gap: 16,
+          padding: 24,
         }}
       >
-        <div className="badge badge-mint">
-          <span>●</span> {PHASE_LABELS[phase] ?? phase}
-        </div>
-        {progress && (
-          <div className="mono" style={{ color: "var(--text-dim)", fontSize: "0.85rem" }}>
-            {progress.current} / {progress.total} modules summarized
-          </div>
-        )}
+        <PipelineProgress phase={phase} progress={progress} />
       </main>
     );
   }
