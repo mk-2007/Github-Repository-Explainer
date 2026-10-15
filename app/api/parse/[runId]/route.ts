@@ -5,9 +5,10 @@ import { buildGraph } from "@/lib/dependency-graph";
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: { runId: string } }
+  { params }: { params: Promise<{ runId: string }> }
 ) {
-  const runId = Number(params.runId);
+  const { runId: rawRunId } = await params;
+  const runId = Number(rawRunId);
   if (!Number.isInteger(runId)) {
     return NextResponse.json({ error: "Invalid run id" }, { status: 400 });
   }

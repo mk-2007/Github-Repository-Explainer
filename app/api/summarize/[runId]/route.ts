@@ -1,21 +1,16 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { summarize } from "@/lib/groq-client";
+import { summarize } from "@/lib/llm-client";
 import { buildModuleSummaryPrompt, estimateTokens } from "@/lib/prompts";
 
-// Serverless functions have execution time limits, and a repo with many
-// modules queued behind a ~30 RPM cap can easily take minutes. Rather than
-// trying to process everything in one request, this route processes a
-// bounded batch per call and is resumable: it only ever selects modules
-// where llm_summary IS NULL, so calling it repeatedly (e.g. from a client
-// poll loop, or a cron-style retry) picks up exactly where it left off.
 const BATCH_SIZE = 8;
 
 export async function POST(
-  req: NextRequest,
-  { params }: { params: { runId: string } }
+  _req: NextRequest,
+  { params }: { params: Promise<{ runId: string }> }
 ) {
-  const runId = Number(params.runId);
+  const { runId: rawRunId } = await params;
+  const runId = Number(rawRunId);
   if (!Number.isInteger(runId)) {
     return NextResponse.json({ error: "Invalid run id" }, { status: 400 });
   }
@@ -46,7 +41,6 @@ export async function POST(
   );
 
   if (pending.rows.length === 0) {
-    // Nothing left to summarize — advance to synthesis.
     await query(`UPDATE analysis_runs SET status = 'synthesizing' WHERE id = $1`, [runId]);
     return NextResponse.json({ status: "synthesizing", done: true });
   }
@@ -69,11 +63,6 @@ export async function POST(
     try {
       summaryText = await summarize(prompt, { maxTokens: 300 });
     } catch (err: any) {
-      // Edge case: a single module failing the LLM call (rate limit
-      // exhausted for the day, transient API error) shouldn't fail the
-      // whole run. Record a placeholder and move on — it'll show up in
-      // the guide as "summary unavailable" rather than blocking everyone
-      // else's already-completed work.
       summaryText = `(summary unavailable: ${err.message ?? "LLM call failed"})`;
     }
 
