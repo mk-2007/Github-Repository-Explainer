@@ -1,0 +1,105 @@
+# GitHub Repository Explainer
+
+Paste a GitHub repo URL, get back an architecture diagram, a module-by-module
+code explanation ordered by actual dependency sequence (not alphabetically),
+and an onboarding guide — generated from a mix of deterministic static
+analysis and a free-tier LLM.
+
+## Why this architecture
+
+The core design constraint is the Groq free tier: ~30 requests/min, ~6-12k
+tokens/min, ~1,000 requests/day (org-wide, not per-key). A repo has far more
+tokens than that budget allows, so the pipeline is built to minimize what
+actually reaches the LLM:
+
+1. **Ingestion** (`lib/github-fetch.ts`) — pulls files via GitHub's REST API,
+   filtered to skip binaries, lockfiles, and vendored/generated code.
+2. **Static analysis** (`lib/parser.ts`, `lib/dependency-graph.ts`) — tree-sitter
+   parses imports/exports per file with zero LLM calls, building the
+   dependency graph that determines both the diagram structure and the
+   topological "explain this in the right order" sequence.
+3. **LLM pass** (`lib/groq-client.ts`) — only now do tokens get spent, one
+   module at a time, queued with rate-limit-aware backoff that reads Groq's
+   actual response headers rather than guessing.
+4. **Cache** (`db/schema.sql`) — every analysis is keyed by `(repo, commit
+   sha)`. Re-submitting an already-processed repo at the same commit costs
+   zero tokens.
+
+## Setup
+
+**Option A — Docker (no local Node/Postgres/build-tools needed):**
+```bash
+cp .env.example .env    # fill in GROQ_API_KEY and GITHUB_TOKEN only
+docker compose up --build
+```
+First run: in a second terminal, apply the schema once the containers are up:
+```bash
+docker compose exec app npm run db:migrate
+```
+Then open http://localhost:3000.
+
+**Option B — locally with Node + Postgres installed directly:**
+```bash
+npm install
+cp .env.example .env.local   # fill in Groq + GitHub tokens + DATABASE_URL
+npm run db:migrate
+npm run dev
+```
+
+## Roadmap
+
+- [x] Phase 1 — project skeleton, schema, rate-limit-aware Groq client
+- [x] Phase 2 — `POST /api/analyze` resolves the default branch + latest
+      commit, checks the cache (returns immediately if this commit was
+      already analyzed or is in progress), otherwise ingests files and
+      persists them to `raw_files` for Phase 3 to pick up. `GET
+      /api/status/[id]` polls run progress.
+- [x] Phase 3 — `lib/parser.ts` extracts imports/exports/LOC per file via
+      tree-sitter (JS/TS/Python grammars); `lib/dependency-graph.ts`
+      resolves relative imports to actual files and topologically sorts
+      them (Kahn's algorithm, with graceful cycle handling — real repos
+      have import cycles). `POST /api/parse/[runId]` wires it to storage.
+      Zero LLM calls in this entire phase.
+- [x] Phase 4 — `lib/prompts.ts` builds token-conscious per-module prompts
+      (truncates oversized files rather than blowing the TPM budget in one
+      call) and a synthesis prompt for Phase 5. `POST
+      /api/summarize/[runId]` processes modules in dependency order in
+      bounded batches (`BATCH_SIZE = 8`) and is resumable by design — it
+      only ever selects modules still missing a summary, so a client can
+      call it repeatedly until `done: true` without duplicating work or
+      re-spending tokens if a serverless invocation times out partway
+      through. A single module's LLM call failing doesn't fail the run —
+      it gets a placeholder summary and processing continues.
+- [x] Phase 5 — `lib/diagram-builder.ts` generates Mermaid architecture +
+      sequence diagrams directly from the dependency graph (zero LLM
+      cost), capping density to the most-connected modules so large repos
+      don't produce unreadable graphs. `POST /api/synthesize/[runId]`
+      makes exactly one LLM call — feeding it capped module summaries in
+      topological order — to produce the architectural narrative and
+      onboarding guide, then marks the run `done`.
+- [x] Phase 6 — Next.js frontend. Landing page (`app/page.tsx`) with an
+      animated dependency-graph hero (the actual topological-order
+      feature, rendered as ambient motion before you've even submitted a
+      repo) and the URL form. `app/run/[id]/page.tsx` drives the whole
+      pipeline client-side — calls parse, then loops on summarize until
+      done, then synthesize — showing live progress, then renders the
+      architecture/sequence Mermaid diagrams, the narrative + onboarding
+      guide, and a per-module walkthrough with language badges. Design:
+      IDE-panel-inspired maximalism (JetBrains Mono display face, mint/
+      amber/violet accents each carrying real meaning — resolved/
+      in-progress/cross-module-link — not decoration).
+
+## Known edge cases to handle (tracked, not yet all implemented)
+
+- Monorepos with multiple independent package.json/pyproject.toml roots
+- Repos with no clear entry point (libraries vs. applications)
+- Mixed-language repos (tree-sitter grammar selected per file extension)
+- Very large repos that exceed daily request quota — needs a "partial
+  analysis, prioritize entry points + most-imported modules first" fallback
+- Private repos (needs OAuth flow, not just a static PAT) — out of scope
+  for v1, public repos only
+- Serverless function execution limits mean a large repo's summarization
+  can't finish in one request — `/api/summarize/[runId]` is intentionally
+  resumable (call it repeatedly, it picks up where it left off) rather
+  than assuming one long-lived process. The frontend's run page drives
+  that repeated calling.
