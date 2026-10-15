@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import MermaidDiagram from "@/components/MermaidDiagram";
 import PipelineProgress, { type Phase } from "@/components/PipelineProgress";
 
@@ -36,6 +36,9 @@ export default function RunPage({ params }: { params: { id: string } }) {
   const [activeTab, setActiveTab] = useState<"architecture" | "sequence" | "guide" | "modules">(
     "architecture"
   );
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedLanguage, setSelectedLanguage] = useState<string>("all");
+  const [copiedGuide, setCopiedGuide] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,6 +101,45 @@ export default function RunPage({ params }: { params: { id: string } }) {
     };
   }, [runId]);
 
+  const filteredModules = useMemo(() => {
+    if (!results) return [];
+    return results.modules.filter((m) => {
+      const matchesSearch = m.path.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesLang =
+        selectedLanguage === "all" ||
+        (selectedLanguage === "unsupported" && m.language === null) ||
+        m.language === selectedLanguage;
+      return matchesSearch && matchesLang;
+    });
+  }, [results, searchQuery, selectedLanguage]);
+
+  const languages = useMemo(() => {
+    if (!results) return [];
+    const set = new Set<string>();
+    results.modules.forEach((m) => set.add(m.language ?? "unsupported"));
+    return Array.from(set).sort();
+  }, [results]);
+
+  function handleCopyGuide() {
+    if (!results?.guide) return;
+    const fullText = `# ${results.repo} Architecture Guide\nCommit: ${results.commitSha}\n\n## Architecture Narrative\n${results.guide.narrative_md}\n\n## Onboarding Guide\n${results.guide.onboarding_md}`;
+    navigator.clipboard.writeText(fullText);
+    setCopiedGuide(true);
+    setTimeout(() => setCopiedGuide(false), 2000);
+  }
+
+  function handleDownloadMarkdown() {
+    if (!results?.guide) return;
+    const fullText = `# ${results.repo} Architecture Guide\nCommit: ${results.commitSha}\n\n## Architecture Narrative\n${results.guide.narrative_md}\n\n## Onboarding Guide\n${results.guide.onboarding_md}`;
+    const blob = new Blob([fullText], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${results.repo.replace("/", "-")}-architecture.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   if (phase === "failed") {
     return (
       <main style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
@@ -138,7 +180,12 @@ export default function RunPage({ params }: { params: { id: string } }) {
   return (
     <main style={{ maxWidth: 1000, margin: "0 auto", padding: "32px 24px" }}>
       <header style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1 className="mono" style={{ fontSize: "1.4rem", margin: 0 }}>{results.repo}</h1>
+        <div>
+          <h1 className="mono" style={{ fontSize: "1.4rem", margin: "0 0 6px" }}>{results.repo}</h1>
+          <a href="/" className="mono" style={{ fontSize: "0.8rem", color: "var(--text-dim)", textDecoration: "none" }}>
+            ← Analyze another repo
+          </a>
+        </div>
         <span className="path">{results.commitSha.slice(0, 7)}</span>
       </header>
 
@@ -179,6 +226,40 @@ export default function RunPage({ params }: { params: { id: string } }) {
 
       {activeTab === "guide" && results.guide && (
         <div style={{ display: "grid", gap: 20 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button
+              onClick={handleCopyGuide}
+              className="mono"
+              style={{
+                background: "transparent",
+                border: "1px solid var(--panel-border)",
+                color: copiedGuide ? "var(--mint)" : "var(--text)",
+                padding: "6px 12px",
+                borderRadius: 4,
+                fontSize: "0.8rem",
+                cursor: "pointer",
+              }}
+            >
+              {copiedGuide ? "✓ Copied Guide" : "Copy Markdown"}
+            </button>
+            <button
+              onClick={handleDownloadMarkdown}
+              className="mono"
+              style={{
+                background: "var(--mint)",
+                border: "none",
+                color: "#0b0e14",
+                fontWeight: 600,
+                padding: "6px 12px",
+                borderRadius: 4,
+                fontSize: "0.8rem",
+                cursor: "pointer",
+              }}
+            >
+              Download .md
+            </button>
+          </div>
+
           <div className="panel" style={{ padding: 24, borderRadius: 6 }}>
             <div className="badge badge-mint" style={{ marginBottom: 12 }}>architecture narrative</div>
             {results.guide.narrative_md.split("\n\n").map((p, i) => (
@@ -195,20 +276,87 @@ export default function RunPage({ params }: { params: { id: string } }) {
       )}
 
       {activeTab === "modules" && (
-        <div style={{ display: "grid", gap: 10 }}>
-          {results.modules.map((m) => (
-            <div key={m.path} className="panel" style={{ padding: 16, borderRadius: 6 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                <span className="path">{m.path}</span>
-                <span className={`badge ${languageBadgeClass(m.language)}`}>
-                  {m.language ?? "unsupported"} · {m.loc} loc
-                </span>
-              </div>
-              <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.92rem", lineHeight: 1.5 }}>
-                {m.llm_summary ?? "No summary generated."}
-              </p>
+        <div>
+          {/* Search and Language Filter Toolbar */}
+          <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              type="text"
+              placeholder="Search module path..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="mono"
+              style={{
+                flex: "1 1 240px",
+                background: "var(--panel)",
+                border: "1px solid var(--panel-border)",
+                color: "var(--text)",
+                padding: "8px 12px",
+                borderRadius: 4,
+                fontSize: "0.85rem",
+                outline: "none",
+              }}
+            />
+
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button
+                onClick={() => setSelectedLanguage("all")}
+                className="mono"
+                style={{
+                  background: selectedLanguage === "all" ? "var(--panel-border)" : "transparent",
+                  border: "1px solid var(--panel-border)",
+                  color: selectedLanguage === "all" ? "var(--mint)" : "var(--text-dim)",
+                  padding: "4px 10px",
+                  borderRadius: 4,
+                  fontSize: "0.75rem",
+                  cursor: "pointer",
+                }}
+              >
+                All ({results.modules.length})
+              </button>
+              {languages.map((lang) => (
+                <button
+                  key={lang}
+                  onClick={() => setSelectedLanguage(lang)}
+                  className="mono"
+                  style={{
+                    background: selectedLanguage === lang ? "var(--panel-border)" : "transparent",
+                    border: "1px solid var(--panel-border)",
+                    color: selectedLanguage === lang ? "var(--mint)" : "var(--text-dim)",
+                    padding: "4px 10px",
+                    borderRadius: 4,
+                    fontSize: "0.75rem",
+                    cursor: "pointer",
+                  }}
+                >
+                  {lang}
+                </button>
+              ))}
             </div>
-          ))}
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {filteredModules.map((m) => (
+              <div key={m.path} className="panel" style={{ padding: 16, borderRadius: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, alignItems: "center" }}>
+                  <span className="path">{m.path}</span>
+                  <span className={`badge ${languageBadgeClass(m.language)}`}>
+                    {m.language ?? "unsupported"} · {m.loc} loc
+                  </span>
+                </div>
+                <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.92rem", lineHeight: 1.5 }}>
+                  {m.llm_summary ?? "No summary generated."}
+                </p>
+              </div>
+            ))}
+
+            {filteredModules.length === 0 && (
+              <div className="panel" style={{ padding: 24, textAlign: "center", borderRadius: 6 }}>
+                <p className="mono" style={{ color: "var(--text-dim)", margin: 0, fontSize: "0.85rem" }}>
+                  No modules match your search filter.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </main>
