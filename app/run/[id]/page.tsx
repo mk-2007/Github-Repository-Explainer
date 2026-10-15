@@ -20,6 +20,22 @@ interface Results {
   guide: { narrative_md: string; onboarding_md: string } | null;
 }
 
+function isLikelyEntryPoint(filePath: string): boolean {
+  const norm = filePath.toLowerCase().replace(/\\/g, "/");
+  return (
+    norm === "index.ts" ||
+    norm === "index.js" ||
+    norm === "main.py" ||
+    norm === "app.py" ||
+    norm === "src/index.ts" ||
+    norm === "src/index.js" ||
+    norm === "src/main.ts" ||
+    norm.endsWith("/page.tsx") ||
+    norm.endsWith("/cli.ts") ||
+    norm.endsWith("/main.py")
+  );
+}
+
 function languageBadgeClass(lang: string | null) {
   if (lang === "typescript") return "badge-violet";
   if (lang === "python") return "badge-mint";
@@ -338,7 +354,14 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             {filteredModules.map((m) => (
               <div key={m.path} className="panel" style={{ padding: 16, borderRadius: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, alignItems: "center" }}>
-                  <span className="path">{m.path}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+  <span className="path">{m.path}</span>
+  {isLikelyEntryPoint(m.path) && (
+    <span className="badge badge-mint" style={{ fontSize: "0.65rem" }}>
+      ENTRY POINT
+    </span>
+  )}
+</div>
                   <span className={`badge ${languageBadgeClass(m.language)}`}>
                     {m.language ?? "unsupported"} · {m.loc} loc
                   </span>
@@ -362,4 +385,5 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
     </main>
   );
 }
+
 
