@@ -1,13 +1,11 @@
-import Parser from "tree-sitter";
+﻿import Parser from "tree-sitter";
 import JavaScript from "tree-sitter-javascript";
 import TypeScript from "tree-sitter-typescript";
 import Python from "tree-sitter-python";
 
 /**
- * Static analysis pass. Runs BEFORE any LLM call — this is what makes the
- * free Groq tier survivable, since the dependency graph and module
- * boundaries come from parsing, not from asking a model to "figure out
- * the architecture" over raw source.
+ * Static analysis pass. Runs BEFORE any LLM call — extracts AST module
+ * boundaries, imports, exports, and language info deterministically.
  */
 
 export interface ParsedModule {
@@ -16,16 +14,37 @@ export interface ParsedModule {
   imports: string[]; // raw import specifiers, resolved later against the file set
   exports: string[];
   loc: number;
+  isEntryPoint?: boolean;
 }
 
 const LANGUAGE_BY_EXT: Record<string, { grammar: any; name: string }> = {
   ".js": { grammar: JavaScript, name: "javascript" },
   ".jsx": { grammar: JavaScript, name: "javascript" },
   ".mjs": { grammar: JavaScript, name: "javascript" },
+  ".cjs": { grammar: JavaScript, name: "javascript" },
   ".ts": { grammar: TypeScript.typescript, name: "typescript" },
   ".tsx": { grammar: TypeScript.tsx, name: "typescript" },
   ".py": { grammar: Python, name: "python" },
 };
+
+export function isEntryPoint(filePath: string): boolean {
+  const norm = filePath.toLowerCase().replace(/\\/g, "/");
+  return (
+    norm === "index.ts" ||
+    norm === "index.js" ||
+    norm === "main.py" ||
+    norm === "app.py" ||
+    norm === "src/index.ts" ||
+    norm === "src/index.js" ||
+    norm === "src/main.ts" ||
+    norm.endsWith("/page.tsx") ||
+    norm.endsWith("/main.py") ||
+    norm.endsWith("/app.py") ||
+    norm.endsWith("/cli.ts") ||
+    norm.endsWith("/server.ts") ||
+    norm.endsWith("/server.js")
+  );
+}
 
 function extOf(path: string): string {
   const idx = path.lastIndexOf(".");
@@ -42,8 +61,6 @@ function extractJsImportsExports(root: Parser.SyntaxNode) {
       if (src) imports.push(src.text.replace(/['"]/g, ""));
     }
     if (node.type === "call_expression") {
-      // Edge case: CommonJS `require("...")` alongside ES imports —
-      // common in real-world JS repos that mix module styles.
       const fn = node.firstNamedChild;
       if (fn?.text === "require") {
         const arg = node.namedChildren[1]?.firstNamedChild;
@@ -55,7 +72,7 @@ function extractJsImportsExports(root: Parser.SyntaxNode) {
       node.type === "export_specifier" ||
       node.type === "export_clause"
     ) {
-      exports.push(node.text.slice(0, 80)); // trimmed, this is a coarse signal not a full export map
+      exports.push(node.text.slice(0, 80));
     }
     for (const child of node.namedChildren) walk(child);
   }
@@ -78,20 +95,52 @@ function extractPyImports(root: Parser.SyntaxNode) {
   }
 
   walk(root);
-  return { imports, exports: [] as string[] }; // Python has no static export list — resolved at import time
+  return { imports, exports: [] as string[] };
+}
+
+function extractJsonManifest(path: string, content: string): ParsedModule {
+  const loc = content.split("\n").length;
+  try {
+    const data = JSON.parse(content);
+    const imports: string[] = [];
+    const exports: string[] = [];
+
+    if (data.name) exports.push(`pkg:${data.name}`);
+    if (data.dependencies) imports.push(...Object.keys(data.dependencies));
+    if (data.devDependencies) imports.push(...Object.keys(data.devDependencies));
+
+    return {
+      path,
+      language: "json",
+      imports,
+      exports,
+      loc,
+      isEntryPoint: false,
+    };
+  } catch {
+    return { path, language: "json", imports: [], exports: [], loc, isEntryPoint: false };
+  }
 }
 
 export function parseFile(path: string, content: string): ParsedModule {
   const loc = content.split("\n").length;
   const ext = extOf(path);
+
+  if (path.endsWith("package.json")) {
+    return extractJsonManifest(path, content);
+  }
+
   const lang = LANGUAGE_BY_EXT[ext];
 
   if (!lang) {
-    // Edge case: unsupported/unknown language (e.g. .go, .rs, .rb, config
-    // files). We don't fail the run — the file still gets an LLM summary
-    // pass later based on raw content, it just won't contribute edges to
-    // the dependency graph.
-    return { path, language: null, imports: [], exports: [], loc };
+    return {
+      path,
+      language: null,
+      imports: [],
+      exports: [],
+      loc,
+      isEntryPoint: isEntryPoint(path),
+    };
   }
 
   try {
@@ -104,11 +153,22 @@ export function parseFile(path: string, content: string): ParsedModule {
         ? extractPyImports(tree.rootNode)
         : extractJsImportsExports(tree.rootNode);
 
-    return { path, language: lang.name, imports, exports, loc };
-  } catch (err) {
-    // Edge case: malformed/unparseable source (e.g. a generated file with
-    // syntax tree-sitter chokes on). Degrade gracefully rather than
-    // failing the whole analysis run over one bad file.
-    return { path, language: lang.name, imports: [], exports: [], loc };
+    return {
+      path,
+      language: lang.name,
+      imports,
+      exports,
+      loc,
+      isEntryPoint: isEntryPoint(path),
+    };
+  } catch {
+    return {
+      path,
+      language: lang.name,
+      imports: [],
+      exports: [],
+      loc,
+      isEntryPoint: isEntryPoint(path),
+    };
   }
 }
