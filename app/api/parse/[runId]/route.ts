@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { parseFile } from "@/lib/parser";
 import { buildGraph } from "@/lib/dependency-graph";
@@ -19,9 +19,7 @@ export async function POST(
   if (runRes.rows.length === 0) {
     return NextResponse.json({ error: "Run not found" }, { status: 404 });
   }
-  // Edge case: don't re-parse a run that's already past this stage
-  // (e.g. a duplicate/racing request) — cache discipline applies within
-  // a run's lifecycle too, not just across runs.
+
   if (!["parsing", "failed"].includes(runRes.rows[0].status)) {
     return NextResponse.json({ status: runRes.rows[0].status, skipped: true });
   }
@@ -39,22 +37,27 @@ export async function POST(
     const parsed = filesRes.rows.map((f) => parseFile(f.path, f.content));
     const graph = buildGraph(parsed);
 
-    for (const m of graph) {
-      await query(
-        `INSERT INTO modules (run_id, path, language, imports, exports, loc, topo_order)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (run_id, path) DO UPDATE SET
-           language = $3, imports = $4, exports = $5, loc = $6, topo_order = $7`,
-        [
-          runId,
-          m.path,
-          m.language,
-          JSON.stringify(m.resolvedImports),
-          JSON.stringify(m.exports.slice(0, 10)), // cap stored exports, this is a coarse signal
-          m.loc,
-          m.topoOrder,
-        ]
-      );
+    // Batch insert modules into PostgreSQL
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < graph.length; i += BATCH_SIZE) {
+      const chunk = graph.slice(i, i + BATCH_SIZE);
+      for (const m of chunk) {
+        await query(
+          `INSERT INTO modules (run_id, path, language, imports, exports, loc, topo_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (run_id, path) DO UPDATE SET
+             language = $3, imports = $4, exports = $5, loc = $6, topo_order = $7`,
+          [
+            runId,
+            m.path,
+            m.language,
+            JSON.stringify(m.resolvedImports),
+            JSON.stringify(m.exports.slice(0, 10)),
+            m.loc,
+            m.topoOrder,
+          ]
+        );
+      }
     }
 
     await query(
@@ -67,7 +70,7 @@ export async function POST(
     return NextResponse.json({
       status: "summarizing",
       moduleCount: graph.length,
-      unsupportedLanguageFiles: unresolvedLanguageCount, // surfaced so the UI can be honest about coverage
+      unsupportedLanguageFiles: unresolvedLanguageCount,
     });
   } catch (err: any) {
     await query(`UPDATE analysis_runs SET status = 'failed', error = $2 WHERE id = $1`, [

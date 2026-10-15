@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { parseRepoUrl, getRepoMeta, getLatestCommitSha, fetchRepoFiles } from "@/lib/github-fetch";
 
@@ -25,9 +25,7 @@ export async function POST(req: NextRequest) {
     );
     const repoId = repoRes.rows[0].id;
 
-    // Cache check — this is the whole point. Same repo at the same commit
-    // costs zero LLM tokens the second time, whether it's done or already
-    // in progress from another request.
+    // Cache check: same repo at the same commit costs zero tokens.
     const existing = await query<{ id: number; status: string }>(
       `SELECT id, status FROM analysis_runs WHERE repo_id = $1 AND commit_sha = $2`,
       [repoId, commitSha]
@@ -36,11 +34,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ runId: existing.rows[0].id, status: existing.rows[0].status, cached: true });
     }
 
-    // New run: create the row, then ingest. Ingestion happens inline here
-    // rather than queued, since GitHub fetch is comparatively fast and
-    // cheap (no token cost) — parsing/summarization (Phases 3-4) are what
-    // actually need the async job queue, because those hit the Groq
-    // rate limit.
+    // New run: create the row, then ingest.
     const runRes = await query<{ id: number }>(
       `INSERT INTO analysis_runs (repo_id, commit_sha, status) VALUES ($1, $2, 'fetching') RETURNING id`,
       [repoId, commitSha]
@@ -66,13 +60,24 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No analyzable files found in this repo" }, { status: 422 });
     }
 
-    // Persist raw files so the Phase 3 parsing step can pick them up in a
-    // separate invocation without re-fetching from GitHub.
-    for (const file of files) {
+    // Persist raw files in multi-row batches rather than single-row serial queries
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < files.length; i += BATCH_SIZE) {
+      const chunk = files.slice(i, i + BATCH_SIZE);
+      const values: unknown[] = [];
+      const rowPlaceholders: string[] = [];
+
+      chunk.forEach((f, idx) => {
+        const offset = idx * 4;
+        rowPlaceholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`);
+        values.push(runId, f.path, f.content, f.size);
+      });
+
       await query(
-        `INSERT INTO raw_files (run_id, path, content, size) VALUES ($1, $2, $3, $4)
+        `INSERT INTO raw_files (run_id, path, content, size)
+         VALUES ${rowPlaceholders.join(", ")}
          ON CONFLICT (run_id, path) DO NOTHING`,
-        [runId, file.path, file.content, file.size]
+        values
       );
     }
 
