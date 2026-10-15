@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, use } from "react";
 import MermaidDiagram from "@/components/MermaidDiagram";
 import PipelineProgress, { type Phase } from "@/components/PipelineProgress";
 
@@ -27,8 +27,8 @@ function languageBadgeClass(lang: string | null) {
   return "badge-amber";
 }
 
-export default function RunPage({ params }: { params: { id: string } }) {
-  const runId = params.id;
+export default function RunPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id: runId } = use(params);
   const [phase, setPhase] = useState<Phase>("parsing");
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -362,3 +362,4 @@ export default function RunPage({ params }: { params: { id: string } }) {
     </main>
   );
 }
+

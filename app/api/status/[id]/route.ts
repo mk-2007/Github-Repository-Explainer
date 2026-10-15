@@ -1,11 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const runId = Number(params.id);
+  const { id: rawId } = await params;
+  const runId = Number(rawId);
   if (!Number.isInteger(runId)) {
     return NextResponse.json({ error: "Invalid run id" }, { status: 400 });
   }
