@@ -1,17 +1,19 @@
-/**
+﻿/**
  * Ingestion layer: pulls repo tree + file contents via the GitHub REST API
- * (no git clone needed). Requires a GitHub PAT (also free) to get the
- * 5,000 req/hr authenticated rate limit instead of 60/hr unauthenticated —
- * a medium repo alone can burn through the unauthenticated limit.
+ * (no git clone needed). Requires a GitHub PAT to get the
+ * 5,000 req/hr authenticated rate limit instead of 60/hr unauthenticated.
  */
 
 const GITHUB_API = "https://api.github.com";
 
-function headers() {
-  return {
-    Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+function headers(): Record<string, string> {
+  const h: Record<string, string> = {
     Accept: "application/vnd.github+json",
   };
+  if (process.env.GITHUB_TOKEN) {
+    h.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  }
+  return h;
 }
 
 export function parseRepoUrl(url: string): { owner: string; name: string } {
@@ -55,9 +57,10 @@ export interface RepoFile {
 
 const SKIP_EXTENSIONS = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".woff", ".woff2",
-  ".ttf", ".eot", ".lock", ".map", ".min.js",
+  ".ttf", ".eot", ".lock", ".map", ".min.js", ".pdf", ".zip", ".tar",
+  ".gz", ".mp4", ".mp3", ".wasm"
 ]);
-const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".git", "vendor"]);
+const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".git", "vendor", ".next", "out"]);
 
 export async function fetchRepoFiles(
   owner: string,
@@ -71,29 +74,46 @@ export async function fetchRepoFiles(
   if (!treeRes.ok) throw new Error(`GitHub tree fetch failed: ${treeRes.status}`);
   const tree = await treeRes.json();
 
-  const candidates = tree.tree.filter((entry: any) => {
+  const candidates = (tree.tree || []).filter((entry: any) => {
     if (entry.type !== "blob") return false;
-    if (SKIP_DIRS.has(entry.path.split("/")[0])) return false;
+    const topDir = entry.path.split("/")[0];
+    if (SKIP_DIRS.has(topDir)) return false;
     if ([...SKIP_EXTENSIONS].some((ext) => entry.path.endsWith(ext))) return false;
-    // Edge case: skip anything unreasonably large — a generated file or
-    // vendored bundle that slipped past dir filtering. 200KB is a generous
-    // ceiling for source files.
+    // Edge case: skip anything unreasonably large (generated bundles / binary files)
     if (entry.size && entry.size > 200_000) return false;
     return true;
   });
 
   const files: RepoFile[] = [];
-  for (const entry of candidates) {
-    const blobRes = await fetch(
-      `${GITHUB_API}/repos/${owner}/${name}/git/blobs/${entry.sha}`,
-      { headers: headers() }
-    );
-    if (!blobRes.ok) continue;
-   const blob = await blobRes.json();
-   const content = Buffer.from(blob.content, "base64").toString("utf-8");
-   if (content.includes("\u0000")) continue;
-   files.push({ path: entry.path, content, size: entry.size });
+  const CONCURRENCY = 10;
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < candidates.length) {
+      const idx = cursor++;
+      const entry = candidates[idx];
+      try {
+        const blobRes = await fetch(
+          `${GITHUB_API}/repos/${owner}/${name}/git/blobs/${entry.sha}`,
+          { headers: headers() }
+        );
+        if (!blobRes.ok) continue;
+        const blob = await blobRes.json();
+        const content = Buffer.from(blob.content, "base64").toString("utf-8");
+        // Skip binary files that slipped past extension check
+        if (content.includes("\u0000")) continue;
+        files.push({ path: entry.path, content, size: entry.size });
+      } catch {
+        // Individual blob fetch failure shouldn't kill the entire pipeline
+      }
+    }
   }
+
+  const workers = Array.from(
+    { length: Math.min(CONCURRENCY, candidates.length) },
+    () => worker()
+  );
+  await Promise.all(workers);
 
   return files;
 }
